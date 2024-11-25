@@ -7,7 +7,8 @@
 
 class Button {
 public:
-    Button(gpio_num_t gpio_num, button_type_t type);
+    Button(gpio_num_t gpio_num);
+    Button(gpio_num_t gpio_num, bool adc);
     ~Button();
 
     void OnPress(std::function<void()> callback);

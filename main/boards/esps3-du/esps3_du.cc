@@ -49,8 +49,8 @@ public:
     {
         uint8_t data, tmp;
 
-        if (mask >= BIT64(8)) {
-            ESP_LOGW(TAG, "mask out of range, bit higher than %d won't work", BIT64(8) - 1);
+        if (mask >= (1U << 8)) {
+            ESP_LOGW(TAG, "mask out of range, bit higher than %d won't work", (1U << 8) - 1);
         }
 
         data = ReadReg(DIRECTION_REG_ADDR);
@@ -174,7 +174,7 @@ private:
 
 public:
     esp32s3_du()
-        : boot_button_(BOOT_BUTTON_GPIO)
+        : boot_button_(BOOT_BUTTON_GPIO, true)
     {
     }
 
@@ -188,6 +188,7 @@ public:
         WifiBoard::Initialize();
     }
 
+    //TODO 需要重写led类 将led改为tca9554上的bit7
     virtual Led *GetBuiltinLed() override
     {
         static Led led(GPIO_NUM_NC);

@@ -4,29 +4,20 @@
 
 static const char *TAG = "Button";
 
-Button::Button(gpio_num_t gpio_num, button_type_t type)
+Button::Button(gpio_num_t gpio_num)
     : gpio_num_(gpio_num)
 {
     if (gpio_num_ == GPIO_NUM_NC) {
         return;
     }
     button_config_t button_config = {
-        .type = type,
+        .type = BUTTON_TYPE_GPIO,
         .long_press_time = 1000,
         .short_press_time = 50,
         .gpio_button_config = {
-            .gpio_num = gpio_ttl,
+            .gpio_num = gpio_num,
             .active_level = 0 },
     };
-    if (BUTTON_TYPE_GPIO == type) {
-        button_config.gpio_button_config.gpio_num = gpio_num;
-        button_config.gpio_button_config.active_level = 0;
-    } else if (BUTTON_TYPE_ADC == type) {
-        button_config.adc_button_config.adc_channel = 0,
-        button_config.adc_button_config.button_index = 0,
-        button_config.adc_button_config.min = 100,
-        button_config.adc_button_config.max = 400,
-    }
 
     button_handle_ = iot_button_create(&button_config);
     if (button_handle_ == NULL) {
@@ -35,25 +26,29 @@ Button::Button(gpio_num_t gpio_num, button_type_t type)
     }
 }
 
-Button::Button(gpio_num_t gpio_adc, )
-    : gpio_num_(gpio_adc),
-      button_num_(numbers)
+Button::Button(gpio_num_t gpio_num, bool adc)
+    : gpio_num_(gpio_num)
 {
-    if ((gpio_adc == GPIO_NUM_NC) || (0 == numbers)) {
+    if ((gpio_num_ == GPIO_NUM_NC) || (false == adc)) {
         return;
     }
 
-    button_config_t adc_btn_cfg = {
+    button_config_t button_config = {
         .type = BUTTON_TYPE_ADC,
         .long_press_time = 1000,
         .short_press_time = 50,
         .adc_button_config = {
-
-        },
+            .adc_channel = 0,
+            .button_index = 0,
+            .min = 100,
+            .max = 400,
+            .adc_handle = nullptr },
     };
-    button_handle_t button_handle_ = iot_button_create(&adc_btn_cfg);
-    if (NULL == button_handle_) {
-        ESP_LOGE(TAG, "Button create failed");
+
+    button_handle_ = iot_button_create(&button_config);
+    if (button_handle_ == NULL) {
+        ESP_LOGE(TAG, "Failed to create button handle");
+        return;
     }
 }
 
