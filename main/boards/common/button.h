@@ -7,17 +7,18 @@
 
 class Button {
 public:
-    Button(gpio_num_t gpio_num);
+    Button(gpio_num_t gpio_num, button_type_t type);
     ~Button();
 
     void OnPress(std::function<void()> callback);
     void OnLongPress(std::function<void()> callback);
     void OnClick(std::function<void()> callback);
     void OnDoubleClick(std::function<void()> callback);
+
 private:
+    uint8_t button_num_;
     gpio_num_t gpio_num_;
     button_handle_t button_handle_;
-
 
     std::function<void()> on_press_;
     std::function<void()> on_long_press_;
