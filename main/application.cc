@@ -21,15 +21,16 @@ extern const char p3_err_pin_end[] asm("_binary_err_pin_p3_end");
 extern const char p3_err_wificonfig_start[] asm("_binary_err_wificonfig_p3_start");
 extern const char p3_err_wificonfig_end[] asm("_binary_err_wificonfig_p3_end");
 
-
-Application::Application() {
+Application::Application()
+{
     event_group_ = xEventGroupCreate();
 
     ota_.SetCheckVersionUrl(CONFIG_OTA_VERSION_URL);
     ota_.SetHeader("Device-Id", SystemInfo::GetMacAddress().c_str());
 }
 
-Application::~Application() {
+Application::~Application()
+{
     if (protocol_ != nullptr) {
         delete protocol_;
     }
@@ -43,13 +44,14 @@ Application::~Application() {
     vEventGroupDelete(event_group_);
 }
 
-void Application::CheckNewVersion() {
-    auto& board = Board::GetInstance();
+void Application::CheckNewVersion()
+{
+    auto &board = Board::GetInstance();
     auto display = board.GetDisplay();
     // Check if there is a new firmware version available
     ota_.SetPostData(board.GetJson());
 
-    while (true) {
+    while (false) {
         if (ota_.CheckVersion()) {
             if (ota_.HasNewVersion()) {
                 // Wait for the chat state to be idle
@@ -58,7 +60,7 @@ void Application::CheckNewVersion() {
                 } while (GetChatState() != kChatStateIdle);
 
                 SetChatState(kChatStateUpgrading);
-                
+
                 display->SetIcon(FONT_AWESOME_DOWNLOAD);
                 display->SetStatus("新版本 " + ota_.GetFirmwareVersion());
 
@@ -86,7 +88,8 @@ void Application::CheckNewVersion() {
     }
 }
 
-void Application::Alert(const std::string&& title, const std::string&& message) {
+void Application::Alert(const std::string &&title, const std::string &&message)
+{
     ESP_LOGW(TAG, "Alert: %s, %s", title.c_str(), message.c_str());
     auto display = Board::GetInstance().GetDisplay();
     display->ShowNotification(message);
@@ -100,11 +103,12 @@ void Application::Alert(const std::string&& title, const std::string&& message) 
     }
 }
 
-void Application::PlayLocalFile(const char* data, size_t size) {
+void Application::PlayLocalFile(const char *data, size_t size)
+{
     ESP_LOGI(TAG, "PlayLocalFile: %zu bytes", size);
     SetDecodeSampleRate(16000);
-    for (const char* p = data; p < data + size; ) {
-        auto p3 = (BinaryProtocol3*)p;
+    for (const char *p = data; p < data + size;) {
+        auto p3 = (BinaryProtocol3 *)p;
         p += sizeof(BinaryProtocol3);
 
         auto payload_size = ntohs(p3->payload_size);
@@ -119,7 +123,8 @@ void Application::PlayLocalFile(const char* data, size_t size) {
     cv_.notify_all();
 }
 
-void Application::ToggleChatState() {
+void Application::ToggleChatState()
+{
     Schedule([this]() {
         if (chat_state_ == kChatStateIdle) {
             SetChatState(kChatStateConnecting);
@@ -137,8 +142,9 @@ void Application::ToggleChatState() {
     });
 }
 
-void Application::Start() {
-    auto& board = Board::GetInstance();
+void Application::Start()
+{
+    auto &board = Board::GetInstance();
     board.Initialize();
 
     auto builtin_led = board.GetBuiltinLed();
@@ -157,7 +163,7 @@ void Application::Start() {
         input_resampler_.Configure(codec->input_sample_rate(), 16000);
         reference_resampler_.Configure(codec->input_sample_rate(), 16000);
     }
-    codec->OnInputData([this, codec](std::vector<int16_t>&& data) {
+    codec->OnInputData([this, codec](std::vector<int16_t> &&data) {
         if (codec->input_sample_rate() != 16000) {
             if (codec->input_channels() == 2) {
                 auto mic_channel = std::vector<int16_t>(data.size() / 2);
@@ -200,34 +206,37 @@ void Application::Start() {
     });
 
     const size_t opus_stack_size = 4096 * 8; // OPUS encoder / decoder use a lot of stack memory
-    audio_encode_task_stack_ = (StackType_t*)heap_caps_malloc(opus_stack_size, MALLOC_CAP_SPIRAM);
-    audio_encode_task_ = xTaskCreateStatic([](void* arg) {
-        Application* app = (Application*)arg;
+    audio_encode_task_stack_ = (StackType_t *)heap_caps_malloc(opus_stack_size, MALLOC_CAP_SPIRAM);
+    audio_encode_task_ = xTaskCreateStatic([](void *arg) {
+        Application *app = (Application *)arg;
         app->AudioEncodeTask();
         vTaskDelete(NULL);
-    }, "opus_encode", opus_stack_size, this, 1, audio_encode_task_stack_, &audio_encode_task_buffer_);
+    },
+                                           "opus_encode", opus_stack_size, this, 1, audio_encode_task_stack_, &audio_encode_task_buffer_);
 
     codec->Start();
 
     /* Wait for the network to be ready */
     board.StartNetwork();
 
-    xTaskCreate([](void* arg) {
-        Application* app = (Application*)arg;
+    xTaskCreate([](void *arg) {
+        Application *app = (Application *)arg;
         app->MainLoop();
         vTaskDelete(NULL);
-    }, "main_loop", 4096 * 2, this, 1, nullptr);
+    },
+                "main_loop", 4096 * 2, this, 1, nullptr);
 
     // Check for new firmware version or get the MQTT broker address
-    xTaskCreate([](void* arg) {
-        Application* app = (Application*)arg;
+    xTaskCreate([](void *arg) {
+        Application *app = (Application *)arg;
         app->CheckNewVersion();
         vTaskDelete(NULL);
-    }, "check_new_version", 4096 * 2, this, 1, nullptr);
+    },
+                "check_new_version", 4096 * 2, this, 1, nullptr);
 
 #ifdef CONFIG_USE_AFE_SR
     audio_processor_.Initialize(codec->input_channels(), codec->input_reference());
-    audio_processor_.OnOutput([this](std::vector<int16_t>&& data) {
+    audio_processor_.OnOutput([this](std::vector<int16_t> &&data) {
         std::lock_guard<std::mutex> lock(mutex_);
         audio_encode_queue_.emplace_back(std::move(data));
         cv_.notify_all();
@@ -284,10 +293,10 @@ void Application::Start() {
 #else
     protocol_ = new MqttProtocol();
 #endif
-    protocol_->OnNetworkError([this](const std::string& message) {
+    protocol_->OnNetworkError([this](const std::string &message) {
         Alert("Error", std::move(message));
     });
-    protocol_->OnIncomingAudio([this](const std::string& data) {
+    protocol_->OnIncomingAudio([this](const std::string &data) {
         std::lock_guard<std::mutex> lock(mutex_);
         audio_decode_queue_.emplace_back(std::move(data));
         cv_.notify_all();
@@ -295,7 +304,7 @@ void Application::Start() {
     protocol_->OnAudioChannelOpened([this, codec, &board]() {
         if (protocol_->server_sample_rate() != codec->output_sample_rate()) {
             ESP_LOGW(TAG, "服务器的音频采样率 %d 与设备输出的采样率 %d 不一致，重采样后可能会失真",
-                protocol_->server_sample_rate(), codec->output_sample_rate());
+                     protocol_->server_sample_rate(), codec->output_sample_rate());
         }
         SetDecodeSampleRate(protocol_->server_sample_rate());
         board.SetPowerSaveMode(false);
@@ -306,7 +315,7 @@ void Application::Start() {
         });
         board.SetPowerSaveMode(true);
     });
-    protocol_->OnIncomingJson([this, display](const cJSON* root) {
+    protocol_->OnIncomingJson([this, display](const cJSON *root) {
         // Parse JSON data
         auto type = cJSON_GetObjectItem(root, "type");
         if (strcmp(type->valuestring, "tts") == 0) {
@@ -353,7 +362,8 @@ void Application::Start() {
     SetChatState(kChatStateIdle);
 }
 
-void Application::Schedule(std::function<void()> callback) {
+void Application::Schedule(std::function<void()> callback)
+{
     std::lock_guard<std::mutex> lock(mutex_);
     main_tasks_.push_back(callback);
     cv_.notify_all();
@@ -362,7 +372,8 @@ void Application::Schedule(std::function<void()> callback) {
 // The Main Loop controls the chat state and websocket connection
 // If other tasks need to access the websocket or chat state,
 // they should use Schedule to call this function
-void Application::MainLoop() {
+void Application::MainLoop()
+{
     while (true) {
         std::unique_lock<std::mutex> lock(mutex_);
         cv_.wait(lock, [this]() {
@@ -375,7 +386,8 @@ void Application::MainLoop() {
     }
 }
 
-void Application::AbortSpeaking() {
+void Application::AbortSpeaking()
+{
     ESP_LOGI(TAG, "Abort speaking");
     protocol_->SendAbort();
 
@@ -384,8 +396,9 @@ void Application::AbortSpeaking() {
     codec->ClearOutputQueue();
 }
 
-void Application::SetChatState(ChatState state) {
-    const char* state_str[] = {
+void Application::SetChatState(ChatState state)
+{
+    const char *state_str[] = {
         "unknown",
         "idle",
         "connecting",
@@ -449,7 +462,8 @@ void Application::SetChatState(ChatState state) {
     protocol_->SendState(state_str[chat_state_]);
 }
 
-void Application::AudioEncodeTask() {
+void Application::AudioEncodeTask()
+{
     ESP_LOGI(TAG, "Audio encode task started");
     auto codec = Board::GetInstance().GetAudioCodec();
 
@@ -464,8 +478,8 @@ void Application::AudioEncodeTask() {
             audio_encode_queue_.pop_front();
             lock.unlock();
 
-            opus_encoder_.Encode(pcm, [this](const uint8_t* opus, size_t opus_size) {
-                Schedule([this, data = std::string(reinterpret_cast<const char*>(opus), opus_size)]() {
+            opus_encoder_.Encode(pcm, [this](const uint8_t *opus, size_t opus_size) {
+                Schedule([this, data = std::string(reinterpret_cast<const char *>(opus), opus_size)]() {
                     protocol_->SendAudio(data);
                 });
             });
@@ -481,7 +495,7 @@ void Application::AudioEncodeTask() {
             int frame_size = opus_decode_sample_rate_ * OPUS_FRAME_DURATION_MS / 1000;
             std::vector<int16_t> pcm(frame_size);
 
-            int ret = opus_decode(opus_decoder_, (const unsigned char*)opus.data(), opus.size(), pcm.data(), frame_size, 0);
+            int ret = opus_decode(opus_decoder_, (const unsigned char *)opus.data(), opus.size(), pcm.data(), frame_size, 0);
             if (ret < 0) {
                 ESP_LOGE(TAG, "Failed to decode audio, error code: %d", ret);
                 continue;
@@ -499,7 +513,8 @@ void Application::AudioEncodeTask() {
     }
 }
 
-void Application::SetDecodeSampleRate(int sample_rate) {
+void Application::SetDecodeSampleRate(int sample_rate)
+{
     if (opus_decode_sample_rate_ == sample_rate) {
         return;
     }
