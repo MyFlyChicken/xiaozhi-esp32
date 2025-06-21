@@ -35,30 +35,7 @@ Button::Button(gpio_num_t gpio_num, bool active_high, uint16_t long_press_time, 
     ESP_ERROR_CHECK(iot_button_new_gpio_device(&button_config, &gpio_config, &button_handle_));
 }
 
-Button::Button(gpio_num_t gpio_adc, )
-    : gpio_num_(gpio_adc),
-      button_num_(numbers)
-{
-    if ((gpio_adc == GPIO_NUM_NC) || (0 == numbers)) {
-        return;
-    }
-
-    button_config_t adc_btn_cfg = {
-        .type = BUTTON_TYPE_ADC,
-        .long_press_time = 1000,
-        .short_press_time = 50,
-        .adc_button_config = {
-
-        },
-    };
-    button_handle_t button_handle_ = iot_button_create(&adc_btn_cfg);
-    if (NULL == button_handle_) {
-        ESP_LOGE(TAG, "Button create failed");
-    }
-}
-
-Button::~Button()
-{
+Button::~Button() {
     if (button_handle_ != NULL) {
         iot_button_delete(button_handle_);
     }
@@ -90,8 +67,7 @@ void Button::OnPressUp(std::function<void()> callback) {
     }, this);
 }
 
-void Button::OnLongPress(std::function<void()> callback)
-{
+void Button::OnLongPress(std::function<void()> callback) {
     if (button_handle_ == nullptr) {
         return;
     }
@@ -100,11 +76,11 @@ void Button::OnLongPress(std::function<void()> callback)
         Button* button = static_cast<Button*>(usr_data);
         if (button->on_long_press_) {
             button->on_long_press_();
-        } }, this);
+        }
+    }, this);
 }
 
-void Button::OnClick(std::function<void()> callback)
-{
+void Button::OnClick(std::function<void()> callback) {
     if (button_handle_ == nullptr) {
         return;
     }
@@ -113,11 +89,11 @@ void Button::OnClick(std::function<void()> callback)
         Button* button = static_cast<Button*>(usr_data);
         if (button->on_click_) {
             button->on_click_();
-        } }, this);
+        }
+    }, this);
 }
 
-void Button::OnDoubleClick(std::function<void()> callback)
-{
+void Button::OnDoubleClick(std::function<void()> callback) {
     if (button_handle_ == nullptr) {
         return;
     }
@@ -126,7 +102,8 @@ void Button::OnDoubleClick(std::function<void()> callback)
         Button* button = static_cast<Button*>(usr_data);
         if (button->on_double_click_) {
             button->on_double_click_();
-        } }, this);
+        }
+    }, this);
 }
 
 void Button::OnMultipleClick(std::function<void()> callback, uint8_t click_count) {

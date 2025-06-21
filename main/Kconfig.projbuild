@@ -271,7 +271,8 @@ choice BOARD_TYPE
         select LV_GIF_CACHE_DECODE_DATA
         bool "立创开发板"
     config BOARD_TYPE_ESPS3_DU
-        bool "淘宝购买的开发板"
+        bool "YF的开发板"
+        depends on IDF_TARGET_ESP32S3
 endchoice
 
 choice ESP_S3_LCD_EV_Board_Version_TYPE

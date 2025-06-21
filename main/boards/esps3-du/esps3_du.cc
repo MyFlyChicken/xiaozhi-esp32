@@ -1,94 +1,38 @@
-#include "application.h"
+#include "wifi_board.h"
 #include "audio_codecs/box_audio_codec.h"
+#include "display/lcd_display.h"
+#include "application.h"
 #include "button.h"
 #include "config.h"
-#include "display/st7789_display.h"
 #include "i2c_device.h"
-#include "led.h"
-#include "wifi_board.h"
+#include "iot/thing_manager.h"
 
+#include <esp_log.h>
+#include <esp_lcd_panel_vendor.h>
+#include <esp_io_expander_tca9554.h>
+#include <esp_lcd_ili9341.h>
 #include <driver/i2c_master.h>
 #include <driver/spi_common.h>
-#include <esp_lcd_panel_vendor.h>
-#include <esp_log.h>
+#include <wifi_station.h>
+#include "esp32_camera.h"
 
 #define TAG "esp32s3_du"
 
-/* Register address */
-#define INPUT_REG_ADDR     (0x00) /* 读取IO状态 */
-#define OUTPUT_REG_ADDR    (0x01) /* 设置IO输出电平 */
-#define DIRECTION_REG_ADDR (0x03) /* 设置IO方向，0输出 1输入 */
+LV_FONT_DECLARE(font_puhui_20_4);
+LV_FONT_DECLARE(font_awesome_20_4);
 
-/* Default register value on power-up */
-#define DIR_REG_DEFAULT_VAL (0xff)
-#define OUT_REG_DEFAULT_VAL (0xff)
-
-typedef enum {
-    PCA9557_OUTPUT = 0, /*!< Output direction */
-    PCA9557_INPUT,      /*!< Input dircetion */
-} pca9557_dir_t;
-
-/**
- * @brief 继承自I2cDevice
- *
- */
-class Pca9557 : public I2cDevice {
-public:
-    /* 构造函数 */
-    Pca9557(i2c_master_bus_handle_t i2c_bus, uint8_t addr)
-        /* 初始化I2C */
-        : I2cDevice(i2c_bus, addr)
-    {
-        /* 首先将IO扩展器全部设置为输入 */
-        WriteReg(DIRECTION_REG_ADDR, DIR_REG_DEFAULT_VAL);
-        /* 将板子用到的IO口设置为输出 */
-        SetDir(DISPLAY_BACKLIGHT_PIN | DISPLAY_RST_GPIO | AUDIO_CODEC_PA_PIN | BUILTIN_LED_GPIO | DISPLAY_TOUCH_INT_GPIO, PCA9557_OUTPUT);
-    }
-
-    void SetDir(uint32_t mask, pca9557_dir_t dir)
-    {
-        uint8_t data, tmp;
-
-        if (mask >= BIT64(8)) {
-            ESP_LOGW(TAG, "mask out of range, bit higher than %d won't work", BIT64(8) - 1);
-        }
-
-        data = ReadReg(DIRECTION_REG_ADDR);
-        tmp = data;
-        for (int i = 0; i < 8; i++) {
-            if (dir != ((tmp >> i) & dir)) {
-                if (dir) {
-                    data |= (1 << i);
-                } else {
-                    data &= ~(1 << i);
-                }
-            }
-        }
-
-        WriteReg(DIRECTION_REG_ADDR, data);
-    }
-
-    void SetOutputState(uint8_t bit, uint8_t level)
-    {
-        uint8_t data = ReadReg(OUTPUT_REG_ADDR);
-        data = (data & ~(1 << bit)) | (level << bit);
-        WriteReg(OUTPUT_REG_ADDR, data);
-    }
-};
-
-class esp32s3_du : public WifiBoard {
+class Esp32S3_du  : public WifiBoard {
 private:
-    i2c_master_bus_handle_t i2c_bus_;
-    i2c_master_dev_handle_t pca9557_handle_;
     Button boot_button_;
-    St7789Display *display_;
-    Pca9557 *pca9557_;
+    i2c_master_bus_handle_t i2c_bus_;
+    LcdDisplay* display_;
+    esp_io_expander_handle_t io_expander_ = NULL;
+    Esp32Camera* camera_;
 
-    void InitializeI2c()
-    {
+    void InitializeI2c() {
         // Initialize I2C peripheral
         i2c_master_bus_config_t i2c_bus_cfg = {
-            .i2c_port = I2C_NUM_1,
+            .i2c_port = (i2c_port_t)1,
             .sda_io_num = AUDIO_CODEC_I2C_SDA_PIN,
             .scl_io_num = AUDIO_CODEC_I2C_SCL_PIN,
             .clk_source = I2C_CLK_SRC_DEFAULT,
@@ -100,40 +44,117 @@ private:
             },
         };
         ESP_ERROR_CHECK(i2c_new_master_bus(&i2c_bus_cfg, &i2c_bus_));
-
-        // Initialize PCA9557
-        pca9557_ = new Pca9557(i2c_bus_, 0x20);
     }
 
-    void InitializeSpi()
-    {
+    void I2cDetect() {
+        uint8_t address;
+        printf("     0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f\r\n");
+        for (int i = 0; i < 128; i += 16) {
+            printf("%02x: ", i);
+            for (int j = 0; j < 16; j++) {
+                fflush(stdout);
+                address = i + j;
+                esp_err_t ret = i2c_master_probe(i2c_bus_, address, pdMS_TO_TICKS(200));
+                if (ret == ESP_OK) {
+                    printf("%02x ", address);
+                } else if (ret == ESP_ERR_TIMEOUT) {
+                    printf("UU ");
+                } else {
+                    printf("-- ");
+                }
+            }
+            printf("\r\n");
+        }
+    }
+
+    void InitializeTca9554() {
+        esp_err_t ret = esp_io_expander_new_i2c_tca9554(i2c_bus_, ESP_IO_EXPANDER_I2C_TCA9554_ADDRESS_000, &io_expander_);
+        if(ret != ESP_OK) {
+            ret = esp_io_expander_new_i2c_tca9554(i2c_bus_, ESP_IO_EXPANDER_I2C_TCA9554A_ADDRESS_000, &io_expander_);
+            if(ret != ESP_OK) {
+                ESP_LOGE(TAG, "TCA9554 create returned error");  
+                return;
+            }
+        }
+        // 配置IO1 2 4 0 7为输出模式
+        ESP_ERROR_CHECK(esp_io_expander_set_dir(io_expander_, 
+            AUDIO_CODEC_PA_PIN | BUILTIN_LED_GPIO | 
+            DISPLAY_BACKLIGHT_PIN | DISPLAY_RESET_PIN |
+            DISPLAY_TOUCH_INT_PIN, 
+            IO_EXPANDER_OUTPUT));
+
+        // 复位LCD和TouchPad
+        ESP_ERROR_CHECK(esp_io_expander_set_level(io_expander_,
+            DISPLAY_BACKLIGHT_PIN | DISPLAY_TOUCH_INT_PIN | DISPLAY_RESET_PIN, 0));
+        vTaskDelay(pdMS_TO_TICKS(300));
+        ESP_ERROR_CHECK(esp_io_expander_set_level(io_expander_,
+            DISPLAY_TOUCH_INT_PIN, 1));
+        vTaskDelay(pdMS_TO_TICKS(200));
+        ESP_ERROR_CHECK(esp_io_expander_set_level(io_expander_,
+            DISPLAY_RESET_PIN, 1));
+        vTaskDelay(pdMS_TO_TICKS(200));
+        ESP_ERROR_CHECK(esp_io_expander_set_level(io_expander_,
+            DISPLAY_BACKLIGHT_PIN, 1));
+        ESP_ERROR_CHECK(esp_io_expander_set_dir(io_expander_,
+        DISPLAY_TOUCH_INT_PIN, IO_EXPANDER_INPUT));
+        
+    }
+
+    void EnableLcdCs() {
+        gpio_set_level(DISPLAY_CS_GPIO, 0);
+    }
+
+    void InitializeSpi() {
         spi_bus_config_t buscfg = {};
-        buscfg.mosi_io_num = DISPLAY_MOSI_GPIO;
+        buscfg.mosi_io_num = GPIO_NUM_0;
         buscfg.miso_io_num = GPIO_NUM_NC;
-        buscfg.sclk_io_num = DISPLAY_CLK_GPIO;
+        buscfg.sclk_io_num = GPIO_NUM_1;
         buscfg.quadwp_io_num = GPIO_NUM_NC;
         buscfg.quadhd_io_num = GPIO_NUM_NC;
         buscfg.max_transfer_sz = DISPLAY_WIDTH * DISPLAY_HEIGHT * sizeof(uint16_t);
         ESP_ERROR_CHECK(spi_bus_initialize(SPI3_HOST, &buscfg, SPI_DMA_CH_AUTO));
     }
 
-    void InitializeButtons()
-    {
-        boot_button_.OnClick(
-            [this]() { Application::GetInstance().ToggleChatState(); });
+    void InitializeButtons() {
+        boot_button_.OnClick([this]() {
+            auto& app = Application::GetInstance();
+            if (app.GetDeviceState() == kDeviceStateStarting && !WifiStation::GetInstance().IsConnected()) {
+                ResetWifiConfiguration();
+            }
+            app.ToggleChatState();
+        });
+
+#if CONFIG_USE_DEVICE_AEC
+        boot_button_.OnDoubleClick([this]() {
+            auto& app = Application::GetInstance();
+            if (app.GetDeviceState() == kDeviceStateIdle) {
+                app.SetAecMode(app.GetAecMode() == kAecOff ? kAecOnDeviceSide : kAecOff);
+            }
+        });
+#endif
     }
 
-    void InitializeSt7789Display()
-    {
+    void InitializeSt7789Display() {
         esp_lcd_panel_io_handle_t panel_io = nullptr;
         esp_lcd_panel_handle_t panel = nullptr;
         // 液晶屏控制IO初始化
         ESP_LOGD(TAG, "Install panel IO");
+
+        /* 配置CS引脚 */
+        gpio_config_t gpio_init_struct;
+        gpio_init_struct.intr_type = GPIO_INTR_DISABLE;
+        gpio_init_struct.mode = GPIO_MODE_INPUT_OUTPUT;
+        gpio_init_struct.pin_bit_mask = 1ull << DISPLAY_CS_GPIO;
+        gpio_init_struct.pull_down_en = GPIO_PULLDOWN_DISABLE;
+        gpio_init_struct.pull_up_en = GPIO_PULLUP_ENABLE;
+        gpio_config(&gpio_init_struct);
+        gpio_set_level(DISPLAY_CS_GPIO, 1);
+
         esp_lcd_panel_io_spi_config_t io_config = {};
         io_config.cs_gpio_num = DISPLAY_CS_GPIO;
         io_config.dc_gpio_num = DISPLAY_DC_GPIO;
         io_config.spi_mode = 0;
-        io_config.pclk_hz = 80 * 1000 * 1000;
+        io_config.pclk_hz = 60 * 1000 * 1000;
         io_config.trans_queue_depth = 10;
         io_config.lcd_cmd_bits = 8;
         io_config.lcd_param_bits = 8;
@@ -143,76 +164,101 @@ private:
         ESP_LOGD(TAG, "Install LCD driver");
         esp_lcd_panel_dev_config_t panel_config = {};
         panel_config.reset_gpio_num = GPIO_NUM_NC;
-        panel_config.rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB;
-        panel_config.data_endian = LCD_RGB_DATA_ENDIAN_LITTLE;
+        panel_config.rgb_ele_order = LCD_RGB_ELEMENT_ORDER_BGR;
         panel_config.bits_per_pixel = 16;
         ESP_ERROR_CHECK(esp_lcd_new_panel_st7789(panel_io, &panel_config, &panel));
+        ESP_ERROR_CHECK(esp_lcd_panel_reset(panel));
+        EnableLcdCs();
+        ESP_ERROR_CHECK(esp_lcd_panel_init(panel));
+        ESP_ERROR_CHECK(esp_lcd_panel_swap_xy(panel, DISPLAY_SWAP_XY));
+        ESP_ERROR_CHECK(esp_lcd_panel_mirror(panel, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y));
+        ESP_ERROR_CHECK(esp_lcd_panel_invert_color(panel, true));
 
-        esp_lcd_panel_reset(panel);
+        display_ = new SpiLcdDisplay(panel_io, panel,
+                                     DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY,
+                                     {
+                                         .text_font = &font_puhui_20_4,
+                                         .icon_font = &font_awesome_20_4,
+                                         .emoji_font = font_emoji_64_init(),
+                                     });
+    }
 
-        pca9557_->SetOutputState(DISPLAY_RST_GPIO, 0);
-        pca9557_->SetOutputState(DISPLAY_BACKLIGHT_PIN, 0);
-        pca9557_->SetOutputState(DISPLAY_TOUCH_INT_GPIO, 0);
-        vTaskDelay(pdMS_TO_TICKS(10));
-        pca9557_->SetOutputState(DISPLAY_TOUCH_INT_GPIO, 1);
-        vTaskDelay(pdMS_TO_TICKS(6));
-        pca9557_->SetOutputState(DISPLAY_RST_GPIO, 1);
-        vTaskDelay(pdMS_TO_TICKS(6));
+    void InitializeCamera() {
+        // Open camera power
 
-        pca9557_->SetDir(DISPLAY_TOUCH_INT_GPIO, PCA9557_INPUT);
+        camera_config_t config = {};
+        config.ledc_channel = LEDC_CHANNEL_2;  // LEDC通道选择  用于生成XCLK时钟 但是S3不用
+        config.ledc_timer = LEDC_TIMER_2; // LEDC timer选择  用于生成XCLK时钟 但是S3不用
+        config.pin_d0 = CAMERA_PIN_D0;
+        config.pin_d1 = CAMERA_PIN_D1;
+        config.pin_d2 = CAMERA_PIN_D2;
+        config.pin_d3 = CAMERA_PIN_D3;
+        config.pin_d4 = CAMERA_PIN_D4;
+        config.pin_d5 = CAMERA_PIN_D5;
+        config.pin_d6 = CAMERA_PIN_D6;
+        config.pin_d7 = CAMERA_PIN_D7;
+        config.pin_xclk = CAMERA_PIN_XCLK;
+        config.pin_pclk = CAMERA_PIN_PCLK;
+        config.pin_vsync = CAMERA_PIN_VSYNC;
+        config.pin_href = CAMERA_PIN_HREF;
+        config.pin_sccb_sda = -1;   // 这里写-1 表示使用已经初始化的I2C接口
+        config.pin_sccb_scl = CAMERA_PIN_SIOC;
+        config.sccb_i2c_port = 1;
+        config.pin_pwdn = CAMERA_PIN_PWDN;
+        config.pin_reset = CAMERA_PIN_RESET;
+        config.xclk_freq_hz = XCLK_FREQ_HZ;
+        config.pixel_format = PIXFORMAT_RGB565;
+        config.frame_size = FRAMESIZE_VGA;
+        config.jpeg_quality = 12;
+        config.fb_count = 1;
+        config.fb_location = CAMERA_FB_IN_PSRAM;
+        config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
 
-        esp_lcd_panel_init(panel);
-        esp_lcd_panel_mirror(panel, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
-        //esp_lcd_panel_invert_color(panel, true);
-        esp_lcd_panel_swap_xy(panel, DISPLAY_SWAP_XY);
+        camera_ = new Esp32Camera(config);
+    }
+    // 物联网初始化，添加对 AI 可见设备
+    void InitializeIot() {
+        auto& thing_manager = iot::ThingManager::GetInstance();
+        thing_manager.AddThing(iot::CreateThing("Speaker"));
 
-        display_ = new St7789Display(panel_io, panel, GPIO_NUM_NC,
-                                     DISPLAY_BACKLIGHT_OUTPUT_INVERT, DISPLAY_WIDTH,
-                                     DISPLAY_HEIGHT, DISPLAY_MIRROR_X,
-                                     DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
     }
 
 public:
-    esp32s3_du()
-        : boot_button_(BOOT_BUTTON_GPIO)
-    {
-    }
-
-    virtual void Initialize() override
-    {
-        ESP_LOGI(TAG, "Initializing esp32s3_du");
+    Esp32S3_du() : boot_button_(BOOT_BUTTON_GPIO) {
+        ESP_LOGI(TAG, "Initializing esp32s3_du Board");
         InitializeI2c();
+        I2cDetect();
+        InitializeTca9554();
+        InitializeCamera();
         InitializeSpi();
-        InitializeSt7789Display();
         InitializeButtons();
-        WifiBoard::Initialize();
+        InitializeSt7789Display();
+        InitializeIot();
     }
 
-    virtual Led *GetBuiltinLed() override
-    {
-        static Led led(GPIO_NUM_NC);
-        return &led;
+    virtual AudioCodec* GetAudioCodec() override {
+        static BoxAudioCodec audio_codec(
+            i2c_bus_, 
+            AUDIO_INPUT_SAMPLE_RATE, 
+            AUDIO_OUTPUT_SAMPLE_RATE,
+            AUDIO_I2S_GPIO_MCLK, 
+            AUDIO_I2S_GPIO_BCLK, 
+            AUDIO_I2S_GPIO_WS, 
+            AUDIO_I2S_GPIO_DOUT, 
+            AUDIO_I2S_GPIO_DIN,
+            GPIO_NUM_NC, 
+            AUDIO_CODEC_ES8311_ADDR, 
+            AUDIO_CODEC_ES7210_ADDR, 
+            AUDIO_INPUT_REFERENCE);
+        return &audio_codec;
     }
 
-    virtual AudioCodec *GetAudioCodec() override
-    {
-        static BoxAudioCodec *audio_codec = nullptr;
-        if (audio_codec == nullptr) {
-            audio_codec = new BoxAudioCodec(
-                i2c_bus_, AUDIO_INPUT_SAMPLE_RATE, AUDIO_OUTPUT_SAMPLE_RATE,
-                AUDIO_I2S_GPIO_MCLK, AUDIO_I2S_GPIO_BCLK, AUDIO_I2S_GPIO_WS,
-                AUDIO_I2S_GPIO_DOUT, AUDIO_I2S_GPIO_DIN, GPIO_NUM_NC,
-                AUDIO_CODEC_ES8311_ADDR, AUDIO_CODEC_ES7210_ADDR,
-                AUDIO_INPUT_REFERENCE);
-            audio_codec->SetOutputVolume(AUDIO_DEFAULT_OUTPUT_VOLUME);
-        }
-        return audio_codec;
-    }
-
-    virtual Display *GetDisplay() override
-    {
+    virtual Display *GetDisplay() override {
         return display_;
+    }
+    virtual Camera* GetCamera() override {
+        return camera_;
     }
 };
 
-DECLARE_BOARD(esp32s3_du);
+DECLARE_BOARD(Esp32S3_du);
